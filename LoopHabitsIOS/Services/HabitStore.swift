@@ -69,6 +69,9 @@ class HabitStore: ObservableObject {
         let newEntry = Entry(timestamp: timestamp, value: newValue)
         updatedHabit.addEntry(newEntry)
         
+        // Recompute scores after adding entry
+        updatedHabit.recomputeScores()
+        
         habits[index] = updatedHabit
         saveHabits()
     }
