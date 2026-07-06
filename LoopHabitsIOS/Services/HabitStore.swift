@@ -83,7 +83,7 @@ class HabitStore: ObservableObject {
         
         var updatedHabit = habits[index]
         let newEntry = Entry(timestamp: timestamp, value: value, notes: notes)
-        updatedHabit.addEntry(newEntry)        updatedHabit.recomputeScores()        
+        updatedHabit.addEntry(newEntry)
         updatedHabit.recomputeScores()
         habits[index] = updatedHabit
         saveHabits()
@@ -121,12 +121,12 @@ class HabitStore: ObservableObject {
     }
     
     func importFromCSV(directory: URL) {
-        do {var importedHabits = try CSVExporter.importAllData(from: directory)
+        do {
+            var importedHabits = try CSVExporter.importAllData(from: directory)
             // Recompute scores for all imported habits
             for i in 0..<importedHabits.count {
                 importedHabits[i].recomputeScores()
             }
-            let importedHabits = try CSVExporter.importAllData(from: directory)
             habits = importedHabits
             saveHabits()
         } catch {

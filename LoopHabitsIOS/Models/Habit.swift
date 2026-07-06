@@ -8,6 +8,7 @@ enum HabitType: String, Codable {
 
 enum TargetType: String, Codable {
     case AT_LEAST = "AT_LEAST"
+    case AT_MOST = "AT_MOST"
 }
 
 /// Represents a single habit
@@ -29,7 +30,14 @@ struct Habit: Identifiable, Codable {
     
     // Score calculation (not stored in CSV, computed on demand)
     private var scoreList: ScoreList?
-    
+
+    // scoreList is derived state, not persisted; exclude it from Codable
+    private enum CodingKeys: String, CodingKey {
+        case id, position, name, type, question, description
+        case frequencyNumerator, frequencyDenominator, color, unit
+        case targetType, targetValue, isArchived, entries
+    }
+
     init(
         id: UUID = UUID(),
         position: Int = 0,

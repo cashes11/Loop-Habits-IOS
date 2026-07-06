@@ -1,32 +1,92 @@
 import SwiftUI
 
+// MARK: - Home screen layout constants
+
+/// Width of each day column in the habit grid (header + cells must match).
+private let kDayColumnWidth: CGFloat = 44
+/// Number of recent days shown on the home screen (newest first, left to right).
+private let kVisibleDays = 5
+/// Horizontal inset applied identically to the header and each habit row so columns align.
+private let kRowHorizontalPadding: CGFloat = 16
+
+/// Uppercase 3-letter weekday, e.g. "SUN".
+private func weekdayShort(_ ts: Timestamp) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "EEE"
+    return formatter.string(from: ts.toDate()).uppercased()
+}
+
+/// Day-of-month number, e.g. "5".
+private func dayOfMonth(_ ts: Timestamp) -> String {
+    String(Calendar.current.component(.day, from: ts.toDate()))
+}
+
 struct ContentView: View {
     @EnvironmentObject var habitStore: HabitStore
     @State private var showingAddHabit = false
     @State private var showingImportExport = false
-    
+    @State private var path: [UUID] = []
+    /// How many days back the leftmost visible column is (0 == today). Driven by sliding the header.
+    @State private var dayOffset = 0
+
+    /// The visible day columns, newest first, shifted into the past by `dayOffset`.
+    private var days: [Timestamp] {
+        (0..<kVisibleDays).map { Timestamp.today().minus(dayOffset + $0) }
+    }
+
+    /// Non-archived habits in manual (position) order.
+    private var visibleHabits: [Habit] {
+        habitStore.habits
+            .filter { !$0.isArchived }
+            .sorted { $0.position < $1.position }
+    }
+
     var body: some View {
-        NavigationView {
-            List {
-                ForEach(habitStore.habits.filter { !$0.isArchived }) { habit in
-                    NavigationLink(destination: HabitDetailView(habit: habit)) {
-                        HabitRowView(habit: habit)
+        NavigationStack(path: $path) {
+            VStack(spacing: 0) {
+                DaysHeaderView(days: days)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 15)
+                            .onEnded { value in
+                                // Slide left → older dates; slide right → back toward today.
+                                let columns = Int((value.translation.width / kDayColumnWidth).rounded())
+                                guard columns != 0 else { return }
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    dayOffset = max(0, dayOffset - columns)
+                                }
+                            }
+                    )
+
+                List {
+                    ForEach(visibleHabits) { habit in
+                        HabitGridRow(habit: habit, days: days) {
+                            path.append(habit.id)
+                        }
+                        .listRowInsets(EdgeInsets(top: 6, leading: kRowHorizontalPadding,
+                                                  bottom: 6, trailing: kRowHorizontalPadding))
                     }
+                    .onDelete(perform: deleteHabits)
                 }
-                .onDelete(perform: deleteHabits)
+                .listStyle(.plain)
             }
-            .navigationTitle("Loop Habits")
+            .navigationTitle("Habits")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(action: { showingImportExport = true }) {
                         Image(systemName: "square.and.arrow.up")
                     }
                 }
-                
+
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showingAddHabit = true }) {
                         Image(systemName: "plus")
                     }
+                }
+            }
+            .navigationDestination(for: UUID.self) { id in
+                if let habit = habitStore.habits.first(where: { $0.id == id }) {
+                    HabitDetailView(habit: habit)
                 }
             }
             .sheet(isPresented: $showingAddHabit) {
@@ -37,129 +97,162 @@ struct ContentView: View {
             }
         }
     }
-    
+
     private func deleteHabits(at offsets: IndexSet) {
-        for index in offsets {
-            let habit = habitStore.habits[index]
+        let habitsToDelete = offsets.map { visibleHabits[$0] }
+        for habit in habitsToDelete {
             habitStore.deleteHabit(habit)
         }
     }
 }
 
-struct HabitRowView: View {
-    let habit: Habit
-    @EnvironmentObject var habitStore: HabitStore
-    @State private var showingNumberPicker = false
-    @State private var selectedTimestamp: Timestamp?
-    
+// MARK: - Days Header
+
+/// The pinned header row: an empty area above the habit names, then one column
+/// per recent day showing the weekday abbreviation and day-of-month.
+struct DaysHeaderView: View {
+    let days: [Timestamp]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Circle()
-                    .fill(habit.colorValue)
-                    .frame(width: 12, height: 12)
-                
-                Text(habit.name)
-                    .font(.headline)
-                
-                Spacer()
-                
-                // Show score as percentage
-                let score = habit.getCurrentScore()
-                if score > 0 {
-                    Text("\(Int(score * 100))%")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+        HStack(spacing: 0) {
+            // Spacer occupying the habit-name column so day columns line up with the rows below.
+            // (A Spacer only grows horizontally, so it won't stretch the header vertically.)
+            Spacer(minLength: 0)
+
+            ForEach(days, id: \.self) { day in
+                VStack(spacing: 2) {
+                    Text(weekdayShort(day))
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                    Text(dayOfMonth(day))
+                        .font(.caption2)
                 }
+                .foregroundColor(.secondary)
+                .frame(width: kDayColumnWidth)
             }
-            
-            if !habit.question.isEmpty {
-                Text(habit.question)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, kRowHorizontalPadding)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemBackground))
+    }
+}
+
+// MARK: - Habit Grid Row
+
+/// A single habit row: colored name on the left (tap to open detail) and one
+/// tappable cell per recent day on the right (tap to record).
+struct HabitGridRow: View {
+    let habit: Habit
+    let days: [Timestamp]
+    let onSelectName: () -> Void
+    @EnvironmentObject var habitStore: HabitStore
+    @State private var numberEntryTimestamp: Timestamp?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onSelectName) {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(habit.colorValue)
+                        .frame(width: 12, height: 12)
+                    Text(habit.name)
+                        .font(.body)
+                        .foregroundColor(habit.colorValue)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            
-            // Show last 7 days - different UI for numerical vs yes/no
-            HStack(spacing: 4) {
-                ForEach(0..<7, id: \.self) { daysAgo in
-                    let timestamp = Timestamp.today().minus(6 - daysAgo)
-                    
+            .buttonStyle(.plain)
+
+            ForEach(days, id: \.self) { day in
+                DayCell(habit: habit, day: day) {
                     if habit.type == .NUMERICAL {
-                        NumericalButton(
-                            habit: habit,
-                            timestamp: timestamp,
-                            color: habit.colorValue
-                        ) {
-                            selectedTimestamp = timestamp
-                            showingNumberPicker = true
-                        }
+                        numberEntryTimestamp = day
                     } else {
-                        CheckmarkButton(
-                            isChecked: habit.isCompletedOn(timestamp),
-                            color: habit.colorValue,
-                            size: .small
-                        ) {
-                            habitStore.toggleEntry(for: habit, on: timestamp)
-                        }
+                        habitStore.toggleEntry(for: habit, on: day)
                     }
                 }
+                .frame(width: kDayColumnWidth)
             }
         }
-        .padding(.vertical, 4)
-        .sheet(isPresented: $showingNumberPicker) {
-            if let timestamp = selectedTimestamp {
-                NumberEntrySheet(habit: habit, timestamp: timestamp)
-            }
+        .sheet(item: $numberEntryTimestamp) { timestamp in
+            NumberEntrySheet(habit: habit, timestamp: timestamp)
         }
     }
 }
 
-    }
-}
+// MARK: - Day Cell
 
-// MARK: - Numerical Button
-struct NumericalButton: View {
+/// One day's cell for a habit. Boolean habits show a check/✕; numerical habits
+/// show the recorded value and unit. Tapping triggers the row's record action.
+struct DayCell: View {
     let habit: Habit
-    let timestamp: Timestamp
-    let color: Color
+    let day: Timestamp
     let action: () -> Void
-    
+
     var body: some View {
-        let entry = habit.getEntry(for: timestamp)
-        let hasValue = entry.value > 0
-        let displayValue = hasValue ? Double(entry.value) / 1000.0 : 0.0
-        
         Button(action: action) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(hasValue ? color.opacity(0.2) : Color.gray.opacity(0.1))
-                    .frame(width: 32, height: 32)
-                
-                if hasValue {
-                    Text(formatValue(displayValue))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundColor(color)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.5)
+            Group {
+                if habit.type == .NUMERICAL {
+                    numericalContent
                 } else {
-                    Text("–")
-                        .font(.system(size: 12))
-                        .foregroundColor(.gray)
+                    booleanContent
                 }
             }
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder private var booleanContent: some View {
+        let done = habit.isCompletedOn(day)
+        let skipped = habit.getEntry(for: day).isSkip
+
+        if done {
+            Image(systemName: "checkmark")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(habit.colorValue)
+        } else if skipped {
+            Image(systemName: "minus")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.gray.opacity(0.4))
+        } else {
+            Image(systemName: "xmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.gray.opacity(0.35))
         }
     }
-    
-    private func formatValue(_ value: Double) -> String {
-        if value >= 1000 {
-            return String(format: "%.0fk", value / 1000)
-        } else if value >= 100 {
-            return String(format: "%.0f", value)
-        } else if value >= 10 {
-            return String(format: "%.1f", value)
-        } else {
-            return String(format: "%.1f", value)
+
+    private var numericalContent: some View {
+        let entry = habit.getEntry(for: day)
+        let hasValue = entry.value > 0
+        let value = Double(max(0, entry.value)) / 1000.0
+        let met = habit.isCompletedOn(day)
+        let color = met ? habit.colorValue : Color.gray.opacity(0.6)
+
+        return VStack(spacing: 1) {
+            Text(hasValue ? formatValue(value) : "0")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(color)
+            if !habit.unit.isEmpty {
+                Text(habit.unit)
+                    .font(.system(size: 9))
+                    .foregroundColor(color.opacity(0.85))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+            }
         }
+    }
+
+    private func formatValue(_ value: Double) -> String {
+        // Numerical habits are integer-only.
+        if value >= 10000 {
+            return "\(Int(value / 1000))k"
+        }
+        return "\(Int(value))"
     }
 }
 
@@ -190,7 +283,7 @@ struct NumberEntrySheet: View {
                 VStack(spacing: 16) {
                     HStack {
                         TextField("Value", text: $valueText)
-                            .keyboardType(.decimalPad)
+                            .keyboardType(.numberPad)
                             .font(.system(size: 48, weight: .bold))
                             .multilineTextAlignment(.center)
                             .focused($isTextFieldFocused)
@@ -248,7 +341,7 @@ struct NumberEntrySheet: View {
             .onAppear {
                 let entry = habit.getEntry(for: timestamp)
                 if entry.value > 0 {
-                    valueText = String(format: "%.2f", Double(entry.value) / 1000.0)
+                    valueText = String(entry.value / 1000)
                 }
                 isTextFieldFocused = true
             }
@@ -256,19 +349,15 @@ struct NumberEntrySheet: View {
     }
     
     private func saveValue() {
-        guard let value = Double(valueText), value >= 0 else { return }
-        // Store value multiplied by 1000 (Android compatibility)
-        let storedValue = Int(value * 1000)
+        guard let value = Int(valueText), value >= 0 else { return }
+        // Store integer value multiplied by 1000 (Android compatibility)
+        let storedValue = value * 1000
         habitStore.setEntry(for: habit, on: timestamp, value: storedValue)
         dismiss()
     }
     
     private func formatTarget(_ target: Double) -> String {
-        if target.truncatingRemainder(dividingBy: 1) == 0 {
-            return String(format: "%.0f", target)
-        } else {
-            return String(format: "%.2f", target)
-        }
+        return String(Int(target))
     }
 }
 

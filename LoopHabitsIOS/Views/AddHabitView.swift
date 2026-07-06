@@ -44,7 +44,7 @@ struct AddHabitView: View {
                     if habitType == .NUMERICAL {
                         TextField("Unit (e.g., km, minutes)", text: $unit)
                         TextField("Target value", text: $targetValue)
-                            .keyboardType(.decimalPad)
+                            .keyboardType(.numberPad)
                     }
                 }
                 
@@ -105,7 +105,7 @@ struct AddHabitView: View {
             color: selectedColor.toHex(),
             unit: habitType == .NUMERICAL ? unit : "",
             targetType: habitType == .NUMERICAL ? .AT_LEAST : nil,
-            targetValue: habitType == .NUMERICAL ? Double(targetValue) : nil
+            targetValue: habitType == .NUMERICAL ? Int(targetValue).map(Double.init) : nil
         )
         
         habitStore.addHabit(habit)
