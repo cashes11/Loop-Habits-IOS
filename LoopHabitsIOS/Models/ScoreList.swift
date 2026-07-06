@@ -55,7 +55,6 @@ class ScoreList {
             current = current.plus(1)
         }
         
-        let isAtMost = targetType == .AT_MOST
         let target = targetValue ?? 0.0
         
         // For non-daily boolean habits, double the numerator and denominator
@@ -65,7 +64,7 @@ class ScoreList {
             denominator *= 2
         }
         
-        var previousValue = isNumerical && isAtMost ? 1.0 : 0.0
+        var previousValue = 0.0
         
         for i in 0..<values.count {
             let offset = values.count - i - 1
@@ -80,23 +79,12 @@ class ScoreList {
                 let normalizedRollingSum = rollingSum / 1000.0  // Values stored × 1000
                 
                 if values[offset] != Entry.SKIP {
+                    // AT_LEAST: percentage = min(1.0, sum / target)
                     let percentageCompleted: Double
-                    
-                    if !isAtMost {
-                        // AT_LEAST: percentage = min(1.0, sum / target)
-                        if target > 0 {
-                            percentageCompleted = min(1.0, normalizedRollingSum / target)
-                        } else {
-                            percentageCompleted = 1.0
-                        }
+                    if target > 0 {
+                        percentageCompleted = min(1.0, normalizedRollingSum / target)
                     } else {
-                        // AT_MOST: percentage = 1 - ((sum - target) / target), clamped [0, 1]
-                        if target > 0 {
-                            let excess = (normalizedRollingSum - target) / target
-                            percentageCompleted = max(0.0, min(1.0, 1.0 - excess))
-                        } else {
-                            percentageCompleted = normalizedRollingSum > 0 ? 0.0 : 1.0
-                        }
+                        percentageCompleted = 1.0
                     }
                     
                     previousValue = Score.compute(

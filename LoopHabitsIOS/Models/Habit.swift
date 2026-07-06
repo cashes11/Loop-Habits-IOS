@@ -8,7 +8,6 @@ enum HabitType: String, Codable {
 
 enum TargetType: String, Codable {
     case AT_LEAST = "AT_LEAST"
-    case AT_MOST = "AT_MOST"
 }
 
 /// Represents a single habit
@@ -83,7 +82,21 @@ struct Habit: Identifiable, Codable {
     
     func isCompletedOn(_ timestamp: Timestamp) -> Bool {
         let entry = getEntry(for: timestamp)
-        return entry.isYes
+        
+        if type == .NUMERICAL {
+            // For numerical habits, check if value meets target
+            if entry.value <= 0 { return false }
+            
+            guard let target = targetValue, target > 0 else {
+                return entry.value > 0
+            }
+            
+            let actualValue = Double(entry.value) / 1000.0
+            return actualValue >= target
+        } else {
+            // For yes/no habits, check if marked yes
+            return entry.isYes
+        }
     }
     
     /// Recomputes the score history for this habit
